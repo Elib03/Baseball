@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Baseball Game</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  canvas { border: 2px solid #333; cursor: none; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="400" height="400"></canvas>
+<audio id="homeRunSound" src="https://coastal-copper-mddwyrti1b.edgeone.app/wii-sports-home-run.mp3"></audio>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = document.getContext ? canvas.getContext('2d') : canvas.getContext('2d');
+const c = canvas.getContext('2d');
+
+// ─── State ───────────────────────────────────────────────────────────────────
+const app = {
+  pitching: false, pitch: '', pitcherIndex: 0,
+  batting: false, batterIndex: 0,
+  checkHit: false, swung: false,
+  distance: 0, homeRun: false,
+  showCall: false, Stop_Time: false,
+  stepsPerSecond: 40,
+};
+
+// Scores & counts
+let homeScoreVal = 0, awayScoreVal = 0;
+let inningNum = 1, inningEnd = 'st';
+let inningDir = 1; // 1 = home batting (rotateAngle 90), -1 = away batting
+let outCountFill = ['dimgray','dimgray','dimgray'];
+let strikeFill = ['dimgray','dimgray','dimgray'];
+let ballFill = ['dimgray','dimgray','dimgray','dimgray'];
+let bases = ['grey','grey','grey']; // base1, base2, base3
+
+// Ball
+const ball = { x: 61, y: 250, r: 2, visible: false, dx: 0, dy: 0, ddx: -0.25 };
+
+// Mouse
+let mouseX = -20, mouseY = -20;
+let crosshairR = 11, critR = 3.5;
+
+// Bat fire
+let batFireVisible = false, batFireX = 360, batFireY = 250, batFireAngle = 0;
+
+// Power states
+const FULL = 'full', NO = 'no';
+let batPower = FULL, pitchPower = FULL;
+
+// Power-up selections (inning-based)
+// Pitcher: Void(1), Ghost(2), Meteor(3)
+// Batter:  Fire(1), Expand(2), TimeStop(3)
+let activePitcherPU = 'void';   // 'void','ghost','meteor'
+let activeBatterPU  = 'fire';   // 'fire','expand','timestop'
+
+// Void
+let voidActive = false;
+
+// Ghost balls
+let ghostBalls = [
+  {x:80,y:255,visible:false,angle:90},
+  {x:80,y:265,visible:false,angle:90},
+  {x:80,y:275,visible:false,angle:90},
+];
+let realGhostIdx = -1;
+
+// Meteor
+let meteorVisible = false, meteorX = -200, meteorY = -200, meteorActive = false;
+
+// Time stop
+let timeStopActive = false;
+
+// Expand shot used
+let expandActive = false;
+
+// Call animation
+let callText = '', callX = 400, callVisible = false, callOpacity = 1;
+let screenOpacity = 0, screenVisible = false;
+
+// Pitcher/Batter images
+const pitcherImgs = [
+  'https://unpleasant-cyan-oqqt8zvkka.edgeone.app/CompSci_Pitcher_3.png',
+  'https://historical-scarlet-yvzadtmwdm.edgeone.app/CompSci_Pitcher_2.png',
+  'https://decent-yellow-cmuwc3y4m5.edgeone.app/CompSci_Pitcher_4.png',
+  'https://marvellous-rose-ypwg752xft.edgeone.app/CompSci_Pitcher_1.png',
+  'https://frail-red-e3vyj43ztj.edgeone.app/CompSci_Pitcher_5.png',
+];
+const batterImgs = [
+  'https://romantic-salmon-uk8aiqdbjq.edgeone.app/CompSci_Batter_1.png',
+  'https://junior-emerald-rtftehoobh.edgeone.app/CompSci_Batter_5.png',
+  'https://vivacious-moccasin-myddflhcd4.edgeone.app/CompSci_Batter_6.png',
+  'https://marvellous-red-pyqd3yagqj.edgeone.app/CompSci_Batter_2.png',
+  'https://inclined-cyan-gjmnrfkuxi.edgeone.app/CompSci_Batter_3.png',
+  'https://proud-blush-yiszzvtvos.edgeone.app/CompSci_Batter_4.png',
+];
+// Batter sequence indices into batterImgs: [0,1,2,3,4,5,1,2,3,4,5,1,2,3,4,5]
+const batterSeq = [0,1,2,3,4,5,1,2,3,4,5];
+
+// Preload images
+function loadImg(src){ const i=new Image(); i.src=src; return i; }
+const pImgs = pitcherImgs.map(loadImg);
+const bImgs = batterImgs.map(loadImg);
+const meteorImg = loadImg('https://grubby-peach-1azuql05gc.edgeone.app/Untitled%20design%20(2).png');
+const ghostImg  = loadImg('https://due-silver-6lgafj0dgs.edgeone.app/Untitled%20design%20(3).png');
+const fireImg   = loadImg('https://vitreous-violet-ypu1dya1gl.edgeone.app/Untitled%20design%20(5).png');
+const batFireImg= loadImg('https://illegal-gold-aag0laxlgr.edgeone.app/Untitled%20design%20(4).png');
+const timeStopImg=loadImg('https://reluctant-maroon-9ea0iov4g4.edgeone.app/Untitled%20design%20(6).png');
+const expandImg = loadImg('https://relaxed-rose-bzsk89yntb.edgeone.app/Untitled%20(1920%20x%201920%20px).png');
+const voidImg   = loadImg('https://wild-aqua-3tdax7czf1.edgeone.app/Untitled%20design%20(1).png');
+const trailImg  = loadImg('https://external-violet-sjymzv3rzs.edgeone.app/Untitled%20design.png');
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function dist(x1,y1,x2,y2){ return Math.hypot(x2-x1,y2-y1); }
+
+function fillColor(name){
+  if(name==='dimgray'||name==='dimgrey') return '#696969';
+  if(name==='gold') return '#FFD700';
+  if(name==='grey'||name==='gray') return '#888';
+  if(name==='white') return '#fff';
+  if(name==='red') return '#e33';
+  if(name==='green') return '#2a8a2a';
+  return name;
+}
+
+function drawCircle(x,y,r,fill,opacity=1){
+  c.save(); c.globalAlpha=opacity;
+  c.beginPath(); c.arc(x,y,r,0,Math.PI*2);
+  c.fillStyle=fillColor(fill); c.fill(); c.restore();
+}
+
+function drawRect(x,y,w,h,fill='black',opacity=1,border=null,bw=1){
+  c.save(); c.globalAlpha=opacity;
+  c.fillStyle=fillColor(fill); c.fillRect(x,y,w,h);
+  if(border){ c.strokeStyle=fillColor(border); c.lineWidth=bw; c.strokeRect(x,y,w,h); }
+  c.restore();
+}
+
+function drawText(text,x,y,size=14,fill='black',font='Orbitron',align='center',opacity=1){
+  c.save(); c.globalAlpha=opacity;
+  c.font=`${size}px "${font}", sans-serif`;
+  c.fillStyle=fillColor(fill);
+  c.textAlign=align; c.textBaseline='middle';
+  c.fillText(text,x,y);
+  c.restore();
+}
+
+function drawGradientText(text,x,y,size=15){
+  c.save();
+  const grd=c.createLinearGradient(x-60,y,x+60,y);
+  grd.addColorStop(0,'red'); grd.addColorStop(0.2,'orange');
+  grd.addColorStop(0.4,'yellow'); grd.addColorStop(0.6,'green');
+  grd.addColorStop(0.8,'blue'); grd.addColorStop(1,'purple');
+  c.font=`${size}px "Orbitron", sans-serif`;
+  c.fillStyle=grd; c.textAlign='center'; c.textBaseline='middle';
+  c.fillText(text,x,y);
+  c.restore();
+}
+
+function drawImageRotated(img,cx,cy,w,h,angle=0,opacity=1){
+  c.save(); c.globalAlpha=opacity;
+  c.translate(cx,cy); c.rotate(angle*Math.PI/180);
+  c.drawImage(img,-w/2,-h/2,w,h);
+  c.restore();
+}
+
+function drawDiamond(cx,cy,size,fill){
+  c.save();
+  c.beginPath();
+  c.moveTo(cx,cy-size); c.lineTo(cx+size,cy);
+  c.lineTo(cx,cy+size); c.lineTo(cx-size,cy);
+  c.closePath();
+  c.fillStyle=fillColor(fill); c.fill();
+  c.strokeStyle='#555'; c.lineWidth=0.5; c.stroke();
+  c.restore();
+}
+
+// ─── Reset ball ──────────────────────────────────────────────────────────────
+function resetBall(){
+  ball.x=61; ball.y=250; ball.dx=0; ball.dy=0; ball.ddx=-0.25; ball.visible=false;
+}
+
+// ─── Animation call text ─────────────────────────────────────────────────────
+function showAnimation(txt){
+  callText=txt.toUpperCase();
+  callX=400; callVisible=true; callOpacity=1;
+  screenVisible=true; screenOpacity=0.5;
+  app.showCall=true;
+}
+
+// ─── Game logic ──────────────────────────────────────────────────────────────
+function baseHit(){
+  if(voidActive){ ball.visible=true; voidActive=false; }
+  if(batFireVisible){ batFireVisible=false; critR=3.5; crosshairR=11; }
+  if(timeStopActive){ timeStopActive=false; }
+  if(expandActive){ crosshairR=11; critR=3.5; expandActive=false; }
+
+  if(app.homeRun){
+    showAnimation('Home Run');
+    document.getElementById('homeRunSound').play();
+    strikeFill=['dimgray','dimgray','dimgray'];
+    ballFill=['dimgray','dimgray','dimgray','dimgray'];
+    if(inningDir===1) homeScoreVal++;
+    else awayScoreVal++;
+    for(let i=0;i<3;i++){
+      if(bases[i]==='gold'){
+        if(inningDir===1) homeScoreVal++;
+        else awayScoreVal++;
+        bases[i]='grey';
+      }
+    }
+  } else if((ball.dx+ball.dy) < -25){
+    showAnimation('Double');
+    if(bases[1]==='gold'){ bases[1]='grey'; if(inningDir===1) homeScoreVal++; else awayScoreVal++; }
+    if(bases[2]==='gold'){ bases[2]='grey'; if(inningDir===1) homeScoreVal++; else awayScoreVal++; }
+    if(bases[0]==='gold'){ bases[0]='grey'; bases[2]='gold'; }
+    bases[1]='gold';
+  } else {
+    showAnimation('Single');
+    for(let i=0;i<3;i++){
+      if(bases[i]==='grey'){ bases[i]='gold'; resetBall(); return; }
+      else if(i===2){ if(inningDir===1) homeScoreVal++; else awayScoreVal++; }
+    }
+  }
+  resetBall(); app.homeRun=false;
+}
+
+function out(){
+  showAnimation('Out');
+  for(let a=0;a<3;a++){
+    if(outCountFill[a]==='dimgray'){ outCountFill[a]='gold'; return; }
+    else if(a===1){
+      bases=['grey','grey','grey'];
+      alert('Switch Sides!');
+      outCountFill=['dimgray','dimgray','dimgray'];
+      strikeFill=['dimgray','dimgray','dimgray'];
+      ballFill=['dimgray','dimgray','dimgray','dimgray'];
+      if(inningNum<4){ batPower=FULL; pitchPower=FULL; }
+      if(batFireVisible){ batFireVisible=false; critR=3.5; crosshairR=11; }
+      if(expandActive){ crosshairR=11; critR=3.5; expandActive=false; }
+      if(inningDir===1){
+        inningDir=-1;
+      } else {
+        inningDir=1;
+        inningNum++;
+        if(inningNum===2){
+          activeBatterPU='expand'; activePitcherPU='ghost';
+          inningEnd='nd';
+        } else if(inningNum===3){
+          activeBatterPU='timestop'; activePitcherPU='meteor';
+          inningEnd='rd';
+        } else {
+          if(homeScoreVal===awayScoreVal){
+            inningEnd='th'; alert('Extra Innings!');
+            batPower=NO; pitchPower=NO;
+          } else {
+            alert(homeScoreVal>awayScoreVal?'P1 WINS!':'P2 WINS!');
+            inningNum=1; inningEnd='st';
+            homeScoreVal=0; awayScoreVal=0;
+          }
+        }
+      }
+      return;
+    }
+  }
+}
+
+function strike(){
+  showAnimation('Strike');
+  if(voidActive){ ball.visible=true; voidActive=false; }
+  if(timeStopActive){ timeStopActive=false; }
+  if(meteorVisible){ meteorVisible=false; meteorActive=false; }
+  for(let i=0;i<3;i++){
+    if(strikeFill[i]==='dimgray'){ strikeFill[i]='gold'; return; }
+    else if(i===1){
+      strikeFill=['dimgray','dimgray','dimgray'];
+      ballFill=['dimgray','dimgray','dimgray','dimgray'];
+      out(); return;
+    }
+  }
+}
+
+function ballCall(){
+  showAnimation('Ball');
+  if(voidActive){ ball.visible=true; voidActive=false; }
+  for(let i=0;i<4;i++){
+    if(ballFill[i]==='dimgray'){ ballFill[i]='gold'; return; }
+    else if(i===2){
+      showAnimation('Walk');
+      ballFill=['dimgray','dimgray','dimgray','dimgray'];
+      for(let j=0;j<3;j++){
+        if(bases[j]==='grey'){ bases[j]='gold'; resetBall(); return; }
+        else if(j===2){ if(inningDir===1) homeScoreVal++; else awayScoreVal++; }
+      }
+      return;
+    }
+  }
+}
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+const keys={};
+document.addEventListener('keydown',e=>{
+  const key=e.key.toLowerCase();
+  if(keys[key]) return;
+  keys[key]=true;
+
+  // Ghost balls block pitching
+  if(ghostBalls[0].visible) return;
+
+  const pitcherSide = (inningDir===1);
+  const pitchKey = pitcherSide
+    ? {w:'Fastball',a:'Knuckleball',s:'Curveball',d:'Riser'}
+    : {arrowup:'Fastball',arrowleft:'Knuckleball',arrowdown:'Curveball',arrowright:'Riser'};
+
+  for(const [k,v] of Object.entries(pitchKey)){
+    if(key===k && ball.x===61 && ball.y===250 && !screenVisible){
+      app.pitching=true; app.pitch=v;
+    }
+  }
+
+  // Batter power-up
+  if(key==='m' && batPower===FULL){
+    if(activeBatterPU==='fire'){ batFireVisible=true; critR=11; crosshairR=1; batPower=NO; }
+    else if(activeBatterPU==='timestop'){ app.Stop_Time=true; batPower=NO; }
+    else if(activeBatterPU==='expand'){ crosshairR=20; critR=6; batPower=NO; expandActive=true; }
+  }
+
+  // Pitcher power-up
+  if(key==='z' && pitchPower===FULL){
+    pitchPower=NO;
+    if(activePitcherPU==='void'){ voidActive=true; }
+    else if(activePitcherPU==='ghost'){
+      const n=Math.floor(Math.random()*3);
+      ghostBalls[n].angle=91;
+      ghostBalls.forEach(gb=>gb.visible=true);
+    }
+    else if(activePitcherPU==='meteor'){
+      meteorVisible=true; meteorActive=true;
+      meteorX=-200; meteorY=-200;
+    }
+  }
+});
+document.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+
+canvas.addEventListener('mousemove',e=>{
+  const r=canvas.getBoundingClientRect();
+  mouseX=e.clientX-r.left; mouseY=e.clientY-r.top;
+});
+
+canvas.addEventListener('mousedown',e=>{
+  const r=canvas.getBoundingClientRect();
+  const mx=e.clientX-r.left, my=e.clientY-r.top;
+  if(mx>250){
+    app.batting=true; app.checkHit=true;
+    app.distance=dist(mx,my,ball.x,ball.y);
+    app.swung=true;
+  }
+});
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+function draw(){
+  // Background
+  c.fillStyle='skyblue'; c.fillRect(0,0,400,400);
+
+  // Grass
+  c.fillStyle='#2a8a2a'; c.fillRect(0,300,400,100);
+
+  // Pitching mound
+  c.beginPath(); c.moveTo(5,300); c.lineTo(25,293); c.lineTo(65,293); c.lineTo(85,300);
+  c.fillStyle='coral'; c.fill();
+  c.fillStyle='white'; c.fillRect(42.5,293,5,3);
+
+  // Home plate
+  c.beginPath(); c.moveTo(345,300); c.lineTo(345,305); c.lineTo(355,305);
+  c.lineTo(360,300); c.closePath(); c.fillStyle='white'; c.fill();
+
+  // Scoreboard background
+  drawRect(5,8,390,75,'white',1,'black',1);
+  drawRect(5,8,270,25,'grey',1,'black',2);
+
+  // Scores
+  drawText('P1-Home',50,20,16,'red');
+  drawText(homeScoreVal,50,55,35,'red');
+  drawText('P2-Away',150,20,16,'rgb(40,100,150)');
+  drawText(awayScoreVal,150,55,35,'rgb(50,110,160)');
+
+  // Inning
+  drawText(inningNum,237,20,15,'black');
+  drawText(inningEnd,252,20,15,'black');
+  // Inning arrow (< rotated 90 or -90)
+  c.save(); c.translate(220,20);
+  c.rotate((inningDir===1?90:-90)*Math.PI/180);
+  drawText('<',0,0,20,'black'); c.restore();
+
+  // Bases diamond
+  drawDiamond(242.5,40,7,bases[1]);  // base2 (2nd)
+  drawDiamond(229.5,53,7,bases[2]);  // base3 (3rd)
+  drawDiamond(255.5,53,7,bases[0]);  // base1 (1st)
+
+  // OSB labels
+  drawText('O',290,20,20,'white');
+  drawText('S',290,43.75,20,'white');
+  drawText('B',290,67.5,20,'white');
+
+  // Out/Strike/Ball indicators
+  const ox=[320,340,360], oy=[20,43.75,67.5];
+  for(let i=0;i<3;i++) drawCircle(ox[i],20,8,outCountFill[i]);
+  for(let i=0;i<3;i++) drawCircle(ox[i],43.75,8,strikeFill[i]);
+  for(let i=0;i<4;i++) drawCircle(i<3?ox[i]:380,67.5,8,ballFill[i]);
+
+  // Pitch controls (pitcher side)
+  const pitchSide = inningDir===1;
+  if(pitchSide){
+    // Left side controls
+    [[10,310,'W','Fastball'],[10,330,'A','Knuckleball'],[10,350,'S','Curveball'],[10,370,'D','Riser']].forEach(([x,y,lbl,name])=>{
+      drawRect(x,y,15,15,'black',0.5);
+      drawText(lbl,x+7.5,y+7.5,9,'white');
+      drawText(name,x+50,y+7.5,12,'white');
+    });
+    drawRect(280,310,100,75,'#2a8a2a'); // block right side
+  } else {
+    // Right side controls
+    [[280,310,'↑','Fastball'],[280,330,'←','Knuckleball'],[280,350,'↓','Curveball'],[280,370,'→','Riser']].forEach(([x,y,lbl,name])=>{
+      drawRect(x,y,15,15,'black',0.5);
+      drawText(lbl,x+7.5,y+7.5,11,'white');
+      drawText(name,x+50,y+7.5,12,'white');
+    });
+    drawRect(10,310,100,75,'#2a8a2a'); // block left side
+  }
+
+  // Power-up UI - Pitcher
+  drawRect(10,90,20,20,'black',0.5);
+  drawText('Z',20,100,15,'white');
+  drawText('(Pitcher)',70,115,12,'dimgray');
+  if(pitchPower===FULL) drawGradientText('Power Up',75,100,15);
+  else drawText('Power Up',75,100,15,'gray');
+
+  // Pitcher power icon
+  const puIcon = activePitcherPU==='void'?voidImg : activePitcherPU==='ghost'?ghostImg : meteorImg;
+  c.drawImage(puIcon,125,90,20,20);
+
+  // Power-up UI - Batter
+  drawRect(260,90,20,20,'black',0.5);
+  drawText('M',270,100,15,'white');
+  drawText('(Batter)',330,115,12,'dimgray');
+  if(batPower===FULL) drawGradientText('Power Up',325,100,15);
+  else drawText('Power Up',325,100,15,'gray');
+
+  // Batter power icon
+  const bIcon = activeBatterPU==='fire'?fireImg : activeBatterPU==='timestop'?timeStopImg : expandImg;
+  c.drawImage(bIcon,370,90,20,20);
+
+  // Pitcher sprite
+  if(app.pitching){
+    c.drawImage(pImgs[app.pitcherIndex],7,225,50,50);
+  } else {
+    c.drawImage(pImgs[0],7,225,50,50);
+  }
+
+  // Batter sprite
+  if(app.batting && app.batterIndex>0){
+    const si=Math.min(app.batterIndex,batterSeq.length-1);
+    c.drawImage(bImgs[batterSeq[si]],309,227,50,50);
+  } else {
+    c.drawImage(bImgs[0],310,227,50,50);
+  }
+
+  // Bat fire
+  if(batFireVisible){
+    drawImageRotated(batFireImg,batFireX,batFireY,30,30,batFireAngle);
+  }
+
+  // Ghost balls
+  ghostBalls.forEach(gb=>{
+    if(gb.visible) drawImageRotated(ghostImg,gb.x,gb.y,15,15,gb.angle);
+  });
+
+  // Void effect (dark circle following ball)
+  if(voidActive && ball.x>260){
+    c.save(); c.globalAlpha=0.85;
+    c.beginPath(); c.arc(ball.x,ball.y,800,0,Math.PI*2);
+    c.fillStyle='black'; c.fill();
+    c.restore();
+  }
+
+  // Meteor
+  if(meteorVisible){
+    c.drawImage(meteorImg,meteorX-100,meteorY-100,200,200);
+  }
+
+  // Ball trail (home run)
+  if(app.homeRun && ball.visible){
+    drawImageRotated(trailImg,ball.x-7,ball.y-14,60,30,70);
+  }
+
+  // Baseball
+  if(ball.visible){
+    drawCircle(ball.x,ball.y,ball.r,'white');
+  }
+
+  // Crosshair
+  drawCircle(mouseX,mouseY,crosshairR,'yellow',0.3);
+  drawCircle(mouseX,mouseY,critR,'orange',0.4);
+
+  // Call animation
+  if(callVisible){
+    if(screenVisible){
+      c.save(); c.globalAlpha=screenOpacity;
+      c.fillStyle='black'; c.fillRect(0,125,400,100);
+      c.restore();
+    }
+    c.save(); c.globalAlpha=callOpacity;
+    c.font='bold 70px "Orbitron", sans-serif';
+    c.fillStyle='red'; c.textAlign='left'; c.textBaseline='middle';
+    c.fillText(callText,callX,175);
+    c.restore();
+  }
+}
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+let lastPitcherFrame=0, lastBatterFrame=0;
+const PITCHER_INTERVAL=40, BATTER_INTERVAL=40;
+
+function update(ts){
+  // Pitcher animation
+  if(app.pitching){
+    if(ts-lastPitcherFrame>PITCHER_INTERVAL){
+      lastPitcherFrame=ts;
+      app.pitcherIndex++;
+      if(app.pitcherIndex===5){
+        app.pitcherIndex=0; app.pitching=false; ball.visible=true;
+        if(app.pitch==='Fastball'){ ball.dx=17.5; ball.dy=-0.5; }
+        else if(app.pitch==='Curveball'){ ball.dx=15; ball.dy=-3; }
+        else if(app.pitch==='Knuckleball'){ ball.dx=10; ball.dy=2.2; }
+        else if(app.pitch==='Riser'){ ball.dx=15; ball.dy=1; }
+      }
+    }
+  }
+
+  // Batter animation
+  if(app.batting){
+    if(ts-lastBatterFrame>BATTER_INTERVAL){
+      lastBatterFrame=ts;
+      // Update bat fire position per frame
+      const fi=app.batterIndex;
+      if(fi===1){ batFireX=360; batFireY=258; batFireAngle=0; }
+      else if(fi===4){ batFireX=331; batFireY=262; batFireAngle=-30; }
+      else if(fi===7){ batFireX=336; batFireY=247; batFireAngle=40; }
+      else if(fi===10){ batFireX=361; batFireY=251; batFireAngle=-25; }
+      app.batterIndex++;
+      if(app.batterIndex>=11){ app.batterIndex=0; app.batting=false; }
+    }
+  }
+
+  // Ball physics
+  if(ball.dx!==0) ball.dy-=ball.ddx;
+  ball.y+=ball.dy;
+  ball.x+=ball.dx;
+
+  // Hit detection
+  if(app.checkHit){
+    const ballDist=dist(mouseX,mouseY,ball.x,ball.y);
+    if(ballDist<=critR){
+      ball.ddx=-0.2; ball.dx=-40; ball.dy=-20;
+      app.homeRun=true; app.pitch='';
+      meteorVisible=false; meteorActive=false;
+      if(voidActive){ ball.visible=true; voidActive=false; }
+      ghostBalls.forEach(gb=>{ gb.visible=false; });
+    } else if(ballDist<=crosshairR){
+      meteorVisible=false; meteorActive=false;
+      if(voidActive){ ball.visible=true; voidActive=false; }
+      ghostBalls.forEach(gb=>{ gb.visible=false; });
+      ball.ddx=-0.2;
+      ball.dx -= ((100-app.distance) - (Math.random()*40+10)) * 0.52;
+      ball.dy -= (100-app.distance)*0.15;
+      app.pitch='';
+    }
+    app.checkHit=false;
+  }
+
+  // Ball out of bounds
+  if(ball.x>355){
+    if((ball.y>265&&ball.y<290)||app.swung){
+      resetBall(); strike(); app.swung=false;
+    } else { resetBall(); ballCall(); }
+  }
+
+  // Base hit
+  if(ball.x<0 && (ball.dx!==0||ball.dy!==0)){
+    strikeFill=['dimgray','dimgray','dimgray'];
+    ballFill=['dimgray','dimgray','dimgray','dimgray'];
+    baseHit();
+  }
+
+  // Ground
+  if(ball.y>=300){
+    ball.y=300; ball.dy*=-0.08;
+    if(ball.dx<1){ ball.dx=0; out();
+      strikeFill=['dimgray','dimgray','dimgray'];
+      ballFill=['dimgray','dimgray','dimgray','dimgray'];
+    } else { ball.dx+=1; }
+  }
+
+  // Reset if out of bounds/stopped
+  if(ball.x<0||ball.y>400||ball.dx===0){ resetBall(); app.homeRun=false; }
+
+  // Pitch gravity effects
+  if(app.pitch==='Curveball'&&ball.x>220&&!timeStopActive) ball.ddx=-1.5;
+  if(app.pitch==='Knuckleball'){
+    if(!timeStopActive){ ball.dy=ball.dy>0?ball.dy-10:ball.dy+10; }
+    else{ ball.dy=ball.dy>0?ball.dy-1.5:ball.dy+2.1; }
+  }
+  if(app.pitch==='Riser'&&ball.x>150&&!timeStopActive) ball.ddx=0.2;
+
+  // Time stop
+  if(app.Stop_Time&&ball.x>250){
+    timeStopActive=true; app.Stop_Time=false;
+    ball.dx/=10;
+    if(app.pitch==='Fastball'){ ball.dy/=40; ball.ddx/=40; }
+    else if(app.pitch==='Curveball'){ ball.ddx/=100; ball.dy/=10; }
+    else if(app.pitch==='Riser'){ ball.dy/=100; ball.ddx/=100; }
+    else if(app.pitch==='Knuckleball'){ ball.ddx/=100; }
+  }
+
+  // Void follows ball
+  if(voidActive&&ball.x>260){ ball.visible=false; }
+
+  // Ghost balls movement
+  if(ghostBalls[0].visible&&ghostBalls[0].x<=355){
+    ball.visible=true;
+    ghostBalls[0].x+=2.5; ghostBalls[1].x+=2.5; ghostBalls[2].x+=2.5;
+    if(ghostBalls[0].x<250){ ghostBalls[0].y-=0.5; } else { ghostBalls[0].y+=0.7; }
+    if(ghostBalls[2].x<250){ ghostBalls[2].y+=0.5; } else { ghostBalls[2].y-=0.7; }
+    const real=ghostBalls.find(gb=>gb.angle===91);
+    if(real){ ball.x=real.x; ball.y=real.y; }
+  } else if(ghostBalls[0].x>200){
+    ghostBalls.forEach((gb,i)=>{ gb.visible=false; gb.x=80; gb.y=255+i*10; gb.angle=90; });
+  }
+
+  // Meteor movement
+  if(meteorVisible&&meteorActive){
+    ball.x=meteorX-4; ball.y=meteorY-33; ball.visible=true;
+    if(meteorX<400){ meteorX+=6; meteorY+=5.2; }
+    else{ meteorVisible=false; meteorX=-200; meteorY=-200; }
+  }
+
+  // Call animation scroll
+  if(app.showCall){
+    callX-=10;
+    if(callX+200<=100){
+      screenOpacity=Math.max(0,screenOpacity-0.05);
+      callOpacity=Math.max(0,callOpacity-0.1);
+      if(screenOpacity<=0){
+        callOpacity=1; screenOpacity=0.5;
+        callX=400; callVisible=false; screenVisible=false; app.showCall=false;
+      }
+    }
+  }
+}
+
+// ─── Loop ─────────────────────────────────────────────────────────────────────
+function loop(ts){
+  update(ts);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
